@@ -29,6 +29,8 @@ pub struct Config {
     pub custom_key_names: Vec<String>,
     /// Log the companion's DEBUG events too.
     pub verbose_logging: bool,
+    /// Let MCP clients drive Tailrmade through `/mcp` and `/bridge`.
+    pub mcp_enabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]

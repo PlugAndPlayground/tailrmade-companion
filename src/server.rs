@@ -1,7 +1,8 @@
-use crate::{ai_handler, frontend_handler, origin_policy, response_handler};
+use crate::{ai_handler, bridge, frontend_handler, mcp, origin_policy, response_handler};
 use axum::{
     extract::Request, middleware::Next, response::Response, routing::get, routing::post, Router,
 };
+use bridge::SharedBridge;
 use frontend_handler::SharedFrontendPackage;
 use serde::Serialize;
 use std::{
@@ -32,17 +33,29 @@ fn set_status(status: Status) {
     *status_cell().write().unwrap() = status;
 }
 
-pub fn router(frontend: SharedFrontendPackage) -> Router {
+pub fn router(frontend: SharedFrontendPackage, bridge: SharedBridge) -> Router {
+    let mcp = Router::new()
+        .route_service("/mcp", mcp::service(bridge.clone()))
+        .route_layer(axum::middleware::from_fn_with_state(
+            bridge.clone(),
+            mcp::require_token,
+        ));
+    let tabs = Router::new()
+        .route("/bridge", get(bridge::handle_upgrade))
+        .with_state(bridge);
+
     Router::new()
         .route("/forward", post(response_handler::tm_request))
         .route("/ping", get(response_handler::ping))
         .route("/ai/request", post(ai_handler::request))
         .route("/ai/claude-stream", post(ai_handler::claude_stream))
         .fallback(get(frontend_handler::serve))
+        .with_state(frontend)
+        .merge(mcp)
+        .merge(tabs)
         .layer(origin_policy::cors())
         .layer(axum::middleware::from_fn(origin_policy::check_origin))
         .layer(axum::middleware::from_fn(log_request))
-        .with_state(frontend)
 }
 
 /// Logs method, path and status only; query strings may carry user data.
@@ -90,8 +103,9 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     port: u16,
     frontend: SharedFrontendPackage,
+    bridge: SharedBridge,
 ) -> Result<(), String> {
-    axum::serve(listener, router(frontend))
+    axum::serve(listener, router(frontend, bridge))
         .await
         .map_err(|error| {
             let error = error.to_string();
@@ -105,7 +119,11 @@ pub async fn serve(
 
 /// Binds to localhost and serves until the process exits.
 /// Returns an error when the port cannot be bound (usually: already in use).
-pub async fn run(port: u16, frontend: SharedFrontendPackage) -> Result<(), String> {
+pub async fn run(
+    port: u16,
+    frontend: SharedFrontendPackage,
+    bridge: SharedBridge,
+) -> Result<(), String> {
     let listener = bind(port).await?;
-    serve(listener, port, frontend).await
+    serve(listener, port, frontend, bridge).await
 }

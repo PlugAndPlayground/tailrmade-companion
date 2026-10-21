@@ -9,6 +9,9 @@
 //! `$TM_KEY{NAME}` placeholders resolve through the same lookup. Arbitrary
 //! process environment variables are deliberately not reachable that way,
 //! since any allowed browser origin can put a placeholder in a request.
+//!
+//! The MCP pairing token lives under its own keychain service, outside that
+//! lookup, so a placeholder can never send it anywhere.
 
 use crate::config;
 use serde::Serialize;
@@ -19,6 +22,8 @@ use std::{
 };
 
 const KEYCHAIN_SERVICE: &str = "app.tailrmade.companion";
+const MCP_TOKEN_SERVICE: &str = "app.tailrmade.companion.mcp";
+const MCP_TOKEN_ENTRY: &str = "pairing-token";
 
 pub struct KnownKey {
     pub name: &'static str,
@@ -239,6 +244,43 @@ pub fn keychain_error() -> Option<String> {
     store().read().unwrap().keychain_error.clone()
 }
 
+fn new_mcp_token() -> Result<String, String> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|error| format!("Could not generate a token: {error}"))?;
+    Ok(format!("tm_{}", URL_SAFE_NO_PAD.encode(bytes)))
+}
+
+fn save_mcp_token(entry: &keyring::Entry) -> Result<String, String> {
+    let token = new_mcp_token()?;
+    entry.set_password(&token).map_err(|error| {
+        format!("Could not save the pairing token to the system keychain: {error}")
+    })?;
+    Ok(token)
+}
+
+/// The MCP pairing token, generated on first use.
+pub fn mcp_token() -> Result<String, String> {
+    let _access = KEYCHAIN_ACCESS.lock().unwrap();
+    let entry = keyring::Entry::new(MCP_TOKEN_SERVICE, MCP_TOKEN_ENTRY)
+        .map_err(|error| error.to_string())?;
+    match entry.get_password() {
+        Ok(token) if !token.trim().is_empty() => Ok(token),
+        Ok(_) | Err(keyring::Error::NoEntry) => save_mcp_token(&entry),
+        Err(error) => Err(format!(
+            "Could not read the pairing token from the system keychain: {error}"
+        )),
+    }
+}
+
+/// Replaces the MCP pairing token; clients using the old one stop working.
+pub fn regenerate_mcp_token() -> Result<String, String> {
+    let _access = KEYCHAIN_ACCESS.lock().unwrap();
+    let entry = keyring::Entry::new(MCP_TOKEN_SERVICE, MCP_TOKEN_ENTRY)
+        .map_err(|error| error.to_string())?;
+    save_mcp_token(&entry)
+}
+
 /// Shows only the last four characters of a key.
 pub fn mask(value: &str) -> String {
     let chars: Vec<char> = value.chars().collect();
@@ -267,6 +309,17 @@ mod tests {
     fn masks_values() {
         assert_eq!(mask("short"), "••••");
         assert_eq!(mask("sk-ant-1234567890abcd"), "••••abcd");
+    }
+
+    #[test]
+    fn mcp_tokens_are_random_and_url_safe() {
+        let a = new_mcp_token().unwrap();
+        let b = new_mcp_token().unwrap();
+        assert_ne!(a, b);
+        assert!(a.starts_with("tm_") && a.len() == 46, "{a}");
+        assert!(a[3..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

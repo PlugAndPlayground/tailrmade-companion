@@ -1,18 +1,30 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ai_handler;
+mod bridge;
 mod config;
 mod desktop;
 mod frontend_handler;
 mod logging;
+mod mcp;
+mod mcp_stdio;
 mod origin_policy;
 mod response_handler;
 mod secrets;
 mod server;
+#[cfg(test)]
+mod tests;
 
 use std::sync::Arc;
 
 fn main() {
+    // Must branch before anything else logs: stdout belongs to the protocol.
+    if std::env::args().nth(1).as_deref() == Some("mcp-stdio") {
+        logging::init_stderr();
+        config::init();
+        std::process::exit(mcp_stdio::run());
+    }
+
     logging::init();
     config::init();
     logging::set_verbose(config::get().verbose_logging);
@@ -38,7 +50,8 @@ fn run_headless() {
         }
         tracing::info!("Config directory: {}", config::config_dir().display());
         let (port, _) = config::port();
-        if server::run(port, frontend).await.is_err() {
+        let bridge = bridge::Bridge::new(config::get().mcp_enabled);
+        if server::run(port, frontend, bridge).await.is_err() {
             std::process::exit(1);
         }
     });

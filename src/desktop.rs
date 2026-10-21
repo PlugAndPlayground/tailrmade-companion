@@ -1,8 +1,8 @@
 //! Desktop shell: tray icon, settings window, autostart and updates.
 
-use crate::{config, frontend_handler, logging, secrets, server};
+use crate::{bridge, config, frontend_handler, logging, secrets, server};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
@@ -23,7 +23,12 @@ const UPDATER_PUBKEY: Option<&str> = option_env!("TM_UPDATER_PUBKEY");
 
 struct AppState {
     frontend: frontend_handler::SharedFrontendPackage,
+    bridge: bridge::SharedBridge,
+    menu: Menu<Wry>,
     status_item: MenuItem<Wry>,
+    agent_item: MenuItem<Wry>,
+    /// The client the agent item currently names; `None` while it is hidden.
+    shown_agent: Mutex<Option<String>>,
 }
 
 pub fn run() {
@@ -53,6 +58,10 @@ pub fn run() {
             open_config_dir,
             set_verbose_logging,
             open_logs_dir,
+            get_mcp_status,
+            set_mcp_enabled,
+            get_mcp_token,
+            regenerate_mcp_token,
             open_tailrmade,
             restart,
             check_update,
@@ -71,11 +80,18 @@ pub fn run() {
             tracing::info!("Config directory: {}", config::config_dir().display());
             tracing::info!("Log directory: {}", logging::log_dir().display());
 
-            let status_item = build_tray(app.handle())?;
+            let (menu, status_item) = build_tray(app.handle())?;
+            let agent_item = MenuItem::with_id(app.handle(), "agent", "", false, None::<&str>)?;
+            let bridge = bridge::Bridge::new(config::get().mcp_enabled);
             app.manage(AppState {
                 frontend: frontend.clone(),
+                bridge: bridge.clone(),
+                menu,
                 status_item,
+                agent_item,
+                shown_agent: Mutex::new(None),
             });
+            watch_agents(app.handle().clone(), bridge.clone());
 
             let background = std::env::args().any(|arg| arg == BACKGROUND_ARG);
             let open_on_launch = !background && std::env::var_os("TM_NO_OPEN").is_none();
@@ -83,6 +99,7 @@ pub fn run() {
             start_server(
                 app.handle().clone(),
                 frontend.clone(),
+                bridge,
                 open_local_when_ready,
             );
 
@@ -116,7 +133,7 @@ fn any_key_configured() -> bool {
         .any(|key| secrets::lookup(key.name).is_some())
 }
 
-fn build_tray(app: &AppHandle) -> tauri::Result<MenuItem<Wry>> {
+fn build_tray(app: &AppHandle) -> tauri::Result<(Menu<Wry>, MenuItem<Wry>)> {
     let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Tailrmade", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
@@ -161,12 +178,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<MenuItem<Wry>> {
         })
         .build(app)?;
 
-    Ok(status)
+    Ok((menu, status))
 }
 
 fn start_server(
     app: AppHandle,
     frontend: frontend_handler::SharedFrontendPackage,
+    bridge: bridge::SharedBridge,
     open_local_when_ready: bool,
 ) {
     let (port, _) = config::port();
@@ -177,7 +195,7 @@ fn start_server(
             if open_local_when_ready {
                 open_tailrmade_url(&app);
             }
-            server::serve(listener, port, frontend).await
+            server::serve(listener, port, frontend, bridge).await
         }
         .await;
 
@@ -210,6 +228,51 @@ fn refresh_tray(app: &AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(tooltip));
     }
+}
+
+/// Keeps the tray's "Agent connected" item in step with MCP client activity.
+/// The periodic tick hides it once the client has been idle long enough.
+fn watch_agents(app: AppHandle, bridge: bridge::SharedBridge) {
+    let mut changes = bridge.subscribe_changes();
+    tauri::async_runtime::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            refresh_agent_item(&app, &bridge);
+            tokio::select! {
+                changed = changes.changed() => if changed.is_err() { break },
+                _ = tick.tick() => {}
+            }
+        }
+    });
+}
+
+fn refresh_agent_item(app: &AppHandle, bridge: &bridge::SharedBridge) {
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let client = bridge
+        .is_enabled()
+        .then(|| bridge.active_client())
+        .flatten();
+    let mut shown = state.shown_agent.lock().unwrap();
+    if *shown == client {
+        return;
+    }
+    match &client {
+        Some(name) => {
+            let _ = state
+                .agent_item
+                .set_text(format!("Agent connected: {name}"));
+            if shown.is_none() {
+                // right below the server status
+                let _ = state.menu.insert(&state.agent_item, 1);
+            }
+        }
+        None => {
+            let _ = state.menu.remove(&state.agent_item);
+        }
+    }
+    *shown = client;
 }
 
 /// The locally served Tailrmade when a package is bundled, the hosted app otherwise.
@@ -287,6 +350,46 @@ struct SettingsState {
     updater_enabled: bool,
     keychain_error: Option<String>,
     keys: Vec<KeyInfo>,
+    mcp: McpStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct McpStatus {
+    enabled: bool,
+    port: u16,
+    tabs: Vec<bridge::TabInfo>,
+    last_client: Option<bridge::ClientInfo>,
+    client_active: bool,
+    /// What a stdio-only client launches, for the Claude Desktop snippet.
+    stdio_command: String,
+    os: &'static str,
+}
+
+fn mcp_status(app: &AppHandle) -> McpStatus {
+    let bridge = &app.state::<AppState>().bridge;
+    let port = match server::status() {
+        server::Status::Running { port } => port,
+        _ => config::port().0,
+    };
+    McpStatus {
+        enabled: bridge.is_enabled(),
+        port,
+        tabs: bridge.tabs(),
+        last_client: bridge.last_client(),
+        client_active: bridge.active_client().is_some(),
+        stdio_command: installed_binary().display().to_string(),
+        os: std::env::consts::OS,
+    }
+}
+
+/// The binary a client should launch. An AppImage runs from a temporary mount,
+/// so its stable path comes from `APPIMAGE`.
+fn installed_binary() -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("APPIMAGE").filter(|_| cfg!(target_os = "linux")) {
+        return path.into();
+    }
+    std::env::current_exe().unwrap_or_else(|_| "tm-companion".into())
 }
 
 fn key_info(name: &str, label: Option<&str>, known: bool) -> KeyInfo {
@@ -350,6 +453,7 @@ async fn get_settings(app: AppHandle) -> Result<SettingsState, String> {
         updater_enabled: updater_pubkey().is_some(),
         keychain_error: secrets::keychain_error(),
         keys,
+        mcp: mcp_status(&app),
     })
 }
 
@@ -429,6 +533,48 @@ fn set_verbose_logging(enabled: bool) -> Result<(), String> {
     logging::set_verbose(enabled);
     tracing::info!(enabled, "Verbose logging changed");
     Ok(())
+}
+
+#[tauri::command]
+fn get_mcp_status(app: AppHandle) -> McpStatus {
+    mcp_status(&app)
+}
+
+#[tauri::command]
+async fn set_mcp_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let bridge = app.state::<AppState>().bridge.clone();
+    let store = bridge.clone();
+    blocking(move || {
+        if enabled {
+            // Create the token up front so a keychain problem shows here.
+            store.set_token(secrets::mcp_token()?);
+        }
+        config::update(|config| config.mcp_enabled = enabled).map_err(|error| error.to_string())
+    })
+    .await??;
+    bridge.set_enabled(enabled);
+    tracing::info!(enabled, "AI agent access (MCP) changed");
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_mcp_token(app: AppHandle) -> Result<String, String> {
+    let bridge = app.state::<AppState>().bridge.clone();
+    blocking(move || {
+        let token = secrets::mcp_token()?;
+        bridge.set_token(token.clone());
+        Ok(token)
+    })
+    .await?
+}
+
+#[tauri::command]
+async fn regenerate_mcp_token(app: AppHandle) -> Result<String, String> {
+    let bridge = app.state::<AppState>().bridge.clone();
+    let token = blocking(secrets::regenerate_mcp_token).await??;
+    bridge.set_token(token.clone());
+    tracing::info!("MCP pairing token regenerated");
+    Ok(token)
 }
 
 #[tauri::command]

@@ -6,6 +6,8 @@
 //!
 //! The default level is INFO. "Verbose logging" in settings switches the
 //! companion's own logs to DEBUG without a restart. `RUST_LOG` overrides both.
+//!
+//! `mcp-stdio` logs to stderr instead of stdout, which carries the protocol.
 
 use crate::config;
 use std::{fs, path::PathBuf, sync::OnceLock};
@@ -24,6 +26,16 @@ pub fn log_dir() -> PathBuf {
 
 /// Installs the global subscriber. Call once, before anything logs.
 pub fn init() {
+    init_with("companion", false);
+}
+
+/// Like `init`, for `mcp-stdio`: console output goes to stderr and the log
+/// files get their own prefix.
+pub fn init_stderr() {
+    init_with("mcp-stdio", true);
+}
+
+fn init_with(prefix: &str, stderr: bool) {
     let (filter, handle) = reload::Layer::new(filter(false));
     let dir = log_dir();
     let file = fs::create_dir_all(&dir)
@@ -31,7 +43,7 @@ pub fn init() {
         .and_then(|_| {
             RollingFileAppender::builder()
                 .rotation(Rotation::DAILY)
-                .filename_prefix("companion")
+                .filename_prefix(prefix)
                 .filename_suffix("log")
                 .max_log_files(KEEP_LOG_FILES)
                 .build(&dir)
@@ -41,7 +53,8 @@ pub fn init() {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(fmt::layer())
+        .with((!stderr).then(fmt::layer))
+        .with(stderr.then(|| fmt::layer().with_writer(std::io::stderr)))
         .with(
             file.ok()
                 .map(|file| fmt::layer().with_ansi(false).with_writer(file)),
@@ -65,9 +78,10 @@ fn filter(verbose: bool) -> EnvFilter {
     if let Ok(filter) = EnvFilter::try_from_default_env() {
         return filter;
     }
+    // rmcp logs whole notifications at INFO
     EnvFilter::new(if verbose {
-        "info,tm_companion=debug"
+        "info,rmcp=warn,tm_companion=debug"
     } else {
-        "info"
+        "info,rmcp=warn"
     })
 }
