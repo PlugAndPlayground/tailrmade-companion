@@ -43,6 +43,39 @@ Lookup order for a key:
 
 `$TM_KEY{NAME}` never reads arbitrary environment variables such as `HOME`.
 
+## Use your own AI (MCP)
+
+MCP clients such as Claude Code, Claude Desktop, Cursor, VS Code and LM Studio
+can edit the app open in Tailrmade, using your own subscription or model
+instead of Tailrmade's assistant:
+
+1. Settings → **AI agents (MCP)** → turn on **Allow AI agents to connect**.
+2. In Tailrmade, AI assistant → Settings → **Agent access**: Read-only or
+   Read & edit.
+3. Copy the snippet for your client from the same settings section.
+
+The companion serves MCP at `http://127.0.0.1:6655/mcp` (your port if you
+changed it) and relays tool calls over a WebSocket (`/bridge`) to the
+Tailrmade tab you used last. Every request needs the pairing token shown in
+Settings (`Authorization: Bearer …`). It lives in the system keychain;
+Regenerate there if it leaks.
+
+Clients that only start local processes (Claude Desktop's config file) run
+`tm-companion mcp-stdio`, which forwards to the running companion and reads
+the token itself:
+
+```json
+{ "mcpServers": { "tailrmade": { "command": "/Applications/Tailrmade Companion.app/Contents/MacOS/tm-companion", "args": ["mcp-stdio"] } } }
+```
+
+Settings shows the exact binary path. Typical locations: macOS as above;
+Windows `C:\Program Files\Tailrmade Companion\tm-companion.exe` (MSI) or
+`%LOCALAPPDATA%\Tailrmade Companion\tm-companion.exe` (setup.exe); Linux
+`/usr/bin/tm-companion`, or the `.AppImage` file itself.
+
+Web-only clients (claude.ai, ChatGPT) need a public URL and cannot reach this
+local server.
+
 ## Config directory
 
 | OS      | Path                                         |
@@ -51,7 +84,7 @@ Lookup order for a key:
 | Windows | `%APPDATA%\Tailrmade`                         |
 | Linux   | `~/.config/tailrmade`                         |
 
-It holds `config.json` (port, custom key names) and a `.env` template for
+It holds `config.json` (port, custom key names, the MCP switch) and a `.env` template for
 setups without a keychain. Override it with `TM_CONFIG_DIR`.
 
 ## Options
@@ -63,6 +96,7 @@ setups without a keychain. Override it with `TM_CONFIG_DIR`.
 | Serve a TM build         | `TM_DIST_DIR`, a `tm/` folder next to the executable, or bundled (Tailrmade Local) |
 | Don't open the browser   | `TM_NO_OPEN=1`                                |
 | Server only, no tray     | `tm-companion --headless` or `TM_HEADLESS=1`  |
+| MCP over stdio           | `tm-companion mcp-stdio` (see above)          |
 
 Headless mode suits Linux servers and containers. On Windows release builds the
 binary has no console, so logs are not visible in headless mode there.
@@ -74,7 +108,9 @@ Browser origins are restricted to the exact hosts `tailrmade.app`,
 port. Subdomains and other IP addresses are not allowed. Requests with a
 disallowed or invalid `Origin` receive HTTP 403. Requests without `Origin`
 remain supported for local navigation and non-browser clients; this policy is
-not authentication. The server only listens on `127.0.0.1`.
+not authentication. The server only listens on `127.0.0.1`. `/mcp` additionally
+requires the pairing token and a loopback `Host` header; `/bridge` requires an
+allowed `Origin`.
 
 ## Development
 
