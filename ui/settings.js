@@ -156,6 +156,8 @@ async function load() {
   $("frontend").textContent = state.frontend ? `Serving Tailrmade from ${state.frontend}` : "";
   $("frontend").hidden = !state.frontend;
 
+  renderMcp(state.mcp);
+
   $("check-update").disabled = !state.updaterEnabled;
   if (!state.updaterEnabled) {
     $("update-status").textContent = "Not enabled in this build.";
@@ -229,3 +231,212 @@ $("check-update").addEventListener("click", async () => {
 
 window.addEventListener("focus", load);
 load();
+
+// ---------------------------------------------------------------------------
+// AI agents (MCP)
+// ---------------------------------------------------------------------------
+
+const MASKED_TOKEN = "••••••••••••••••";
+let mcp = null;
+// Fetched as soon as the section shows: clipboard writes must happen right in
+// the click handler, without waiting on the keychain.
+let token = null;
+let revealed = false;
+let mcpClient = "claude-code";
+
+function mcpUrl() {
+  return `http://127.0.0.1:${mcp.port}/mcp`;
+}
+
+function claudeDesktopConfigPath() {
+  if (mcp.os === "macos") return "~/Library/Application Support/Claude/claude_desktop_config.json";
+  if (mcp.os === "windows") return "%APPDATA%\\Claude\\claude_desktop_config.json";
+  return "claude_desktop_config.json";
+}
+
+function httpConfig(rootKey, token, extra = {}) {
+  return JSON.stringify(
+    {
+      [rootKey]: {
+        tailrmade: { ...extra, url: mcpUrl(), headers: { Authorization: `Bearer ${token}` } },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+function snippet(token) {
+  switch (mcpClient) {
+    case "claude-code":
+      return {
+        note: "Run in a terminal:",
+        text: `claude mcp add --transport http tailrmade ${mcpUrl()} --header "Authorization: Bearer ${token}"`,
+      };
+    case "claude-desktop":
+      return {
+        note: `Add to ${claudeDesktopConfigPath()}, then restart Claude Desktop. It starts the companion's stdio bridge, which reads the token from the keychain itself.`,
+        text: JSON.stringify(
+          { mcpServers: { tailrmade: { command: mcp.stdioCommand, args: ["mcp-stdio"] } } },
+          null,
+          2,
+        ),
+      };
+    case "vscode":
+      return {
+        note: "Add to .vscode/mcp.json in your workspace (or the user mcp.json):",
+        text: httpConfig("servers", token, { type: "http" }),
+      };
+    case "cursor":
+      return { note: "Add to ~/.cursor/mcp.json:", text: httpConfig("mcpServers", token) };
+    case "lmstudio":
+      return {
+        note: "In LM Studio: Program → Install → Edit mcp.json, then add:",
+        text: httpConfig("mcpServers", token),
+      };
+  }
+}
+
+function renderSnippet() {
+  const { note, text } = snippet(revealed && token ? token : MASKED_TOKEN);
+  $("mcp-snippet-note").textContent = note;
+  $("mcp-snippet").textContent = text;
+  for (const button of $("mcp-clients").querySelectorAll("button")) {
+    button.classList.toggle("selected", button.dataset.client === mcpClient);
+  }
+}
+
+function describeAge(seconds) {
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`;
+  return `${Math.round(seconds / 3600)} h ago`;
+}
+
+function renderMcp(status) {
+  mcp = status;
+  $("mcp-enabled").checked = status.enabled;
+  $("mcp-details").hidden = !status.enabled;
+  if (status.enabled && !token) loadToken();
+
+  const pill = $("mcp-pill");
+  pill.hidden = !status.enabled;
+  if (status.clientActive && status.lastClient) {
+    pill.textContent = `Agent connected: ${status.lastClient.name}`;
+    pill.className = "pill ok";
+  } else {
+    pill.textContent = status.tabs.length ? "Tailrmade connected" : "Waiting for Tailrmade";
+    pill.className = "pill";
+  }
+
+  if (status.tabs.length) {
+    $("mcp-tabs").replaceChildren(
+      ...status.tabs.map((tab) => {
+        const li = document.createElement("li");
+        const head = document.createElement("div");
+        head.className = "key-head";
+        const title = document.createElement("div");
+        title.className = "key-label";
+        title.textContent = tab.title || "Untitled";
+        const state = document.createElement("div");
+        state.className = tab.active ? "key-source set" : "key-source";
+        const since = describeAge(Math.max(0, Date.now() / 1000 - tab.connectedAt));
+        state.textContent = tab.active ? `Receives tool calls · connected ${since}` : `Connected ${since}`;
+        head.append(title, state);
+        li.append(head);
+        return li;
+      }),
+    );
+  } else {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No Tailrmade tab. Open Tailrmade and turn on Agent access in the AI assistant settings.";
+    $("mcp-tabs").replaceChildren(empty);
+  }
+
+  $("mcp-client").textContent = status.lastClient
+    ? `Last MCP client: ${status.lastClient.name} ${status.lastClient.version} (${describeAge(status.lastClient.idleSecs)})`
+    : "No MCP client has connected since the companion started.";
+  renderSnippet();
+}
+
+async function refreshMcp() {
+  try {
+    renderMcp(await invoke("get_mcp_status"));
+  } catch (error) {
+    console.error(error);
+  }
+}
+
+let tokenRequest = null;
+function loadToken() {
+  tokenRequest ||= call("get_mcp_token")
+    .then((value) => {
+      token = value;
+      renderToken();
+    })
+    .finally(() => (tokenRequest = null));
+  return tokenRequest;
+}
+
+function renderToken() {
+  $("mcp-token").textContent = revealed && token ? token : MASKED_TOKEN;
+  $("mcp-reveal").textContent = revealed ? "Hide" : "Show";
+  renderSnippet();
+}
+
+async function copy(text, message) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(message);
+  } catch (error) {
+    toast(`Could not copy: ${error}`, true);
+  }
+}
+
+$("mcp-enabled").addEventListener("change", async (event) => {
+  try {
+    await call(
+      "set_mcp_enabled",
+      { enabled: event.target.checked },
+      event.target.checked ? "AI agents can connect" : "AI agents turned off",
+    );
+  } finally {
+    refreshMcp();
+  }
+});
+
+$("mcp-reveal").addEventListener("click", () => {
+  revealed = !revealed;
+  if (!token) loadToken();
+  renderToken();
+});
+
+$("mcp-copy-token").addEventListener("click", () => {
+  if (token) copy(token, "Token copied");
+  else loadToken();
+});
+
+$("mcp-regenerate").addEventListener("click", async () => {
+  if (!confirm("Regenerate the pairing token? Clients set up with the current token stop working until you update them.")) {
+    return;
+  }
+  token = await call("regenerate_mcp_token", {}, "New token generated");
+  renderToken();
+});
+
+$("mcp-copy-snippet").addEventListener("click", () => {
+  if (token) copy(snippet(token).text, "Snippet copied");
+  else loadToken();
+});
+
+$("mcp-clients").addEventListener("click", (event) => {
+  const client = event.target.dataset?.client;
+  if (!client) return;
+  mcpClient = client;
+  renderSnippet();
+});
+
+// Connected tabs and clients change while the window is open.
+setInterval(() => {
+  if (!document.hidden && mcp?.enabled) refreshMcp();
+}, 3000);

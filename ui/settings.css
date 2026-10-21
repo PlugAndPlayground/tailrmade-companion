@@ -153,6 +153,19 @@ button:disabled { opacity: .5; cursor: default; }
   border-radius: 6px;
 }
 
+.segmented { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 8px; }
+.segmented button.selected { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+.snippet {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .toast {
   position: fixed;
   left: 50%;

@@ -44,6 +44,48 @@
   </section>
 
   <section>
+    <div class="section-head">
+      <h2>AI agents (MCP)</h2>
+      <span class="pill" id="mcp-pill" hidden></span>
+    </div>
+    <p class="muted">Let your own AI client (Claude Code, Claude Desktop, Cursor, VS Code, LM Studio, …) edit the app open in Tailrmade. In Tailrmade, also turn on Agent access in the AI assistant settings.</p>
+    <label class="check">
+      <input type="checkbox" id="mcp-enabled">
+      <span>Allow AI agents to connect</span>
+    </label>
+
+    <div id="mcp-details" hidden>
+      <h3>Pairing token</h3>
+      <p class="muted">Clients send this with every request. Anyone who has it can edit the app open in Tailrmade.</p>
+      <div class="row">
+        <code class="path" id="mcp-token">••••••••••••••••</code>
+        <button id="mcp-reveal">Show</button>
+        <button id="mcp-copy-token">Copy</button>
+        <button class="danger" id="mcp-regenerate">Regenerate</button>
+      </div>
+
+      <h3>Connected</h3>
+      <ul class="keys" id="mcp-tabs"></ul>
+      <p class="muted" id="mcp-client"></p>
+
+      <h3>Set up a client</h3>
+      <div class="segmented" id="mcp-clients" role="tablist">
+        <button type="button" data-client="claude-code">Claude Code</button>
+        <button type="button" data-client="claude-desktop">Claude Desktop</button>
+        <button type="button" data-client="vscode">VS Code</button>
+        <button type="button" data-client="cursor">Cursor</button>
+        <button type="button" data-client="lmstudio">LM Studio</button>
+      </div>
+      <p class="muted" id="mcp-snippet-note"></p>
+      <pre class="snippet"><code id="mcp-snippet"></code></pre>
+      <div class="row">
+        <button id="mcp-copy-snippet">Copy</button>
+        <span class="muted">Copies the snippet with the token filled in.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
     <h2>General</h2>
     <label class="check">
       <input type="checkbox" id="autostart">
