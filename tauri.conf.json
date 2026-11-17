@@ -40,7 +40,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/PlugAndPlayground/pnp-companion-2/releases/latest/download/latest.json"
+        "https://github.com/PlugAndPlayground/tailrmade-companion/releases/latest/download/latest.json"
       ],
       "pubkey": "set at build time via TM_UPDATER_PUBKEY",
       "windows": {

@@ -3,7 +3,7 @@ name = "tm-companion"
 version = "0.2.0"
 edition = "2021"
 description = "Local companion for Tailrmade: forwards API calls, runs AI requests with your own keys, optionally serves Tailrmade"
-repository = "https://github.com/PlugAndPlayground/pnp-companion-2"
+repository = "https://github.com/PlugAndPlayground/tailrmade-companion"
 default-run = "tm-companion"
 
 [dependencies]

@@ -10,7 +10,7 @@ status and opens Settings, where you add API keys.
 ## Install
 
 Download the installer for your OS from
-[Releases](https://github.com/PlugAndPlayground/pnp-companion-2/releases):
+[Releases](https://github.com/PlugAndPlayground/tailrmade-companion/releases):
 
 | OS      | File                                   |
 | ------- | -------------------------------------- |
