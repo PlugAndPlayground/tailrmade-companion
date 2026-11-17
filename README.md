@@ -18,9 +18,10 @@ Download the installer for your OS from
 | Windows | `.msi` or `-setup.exe`                 |
 | Linux   | `.AppImage`, `.deb` or `.rpm`          |
 
-Until the builds are signed, the OS will warn on first launch:
+macOS builds from 2.0.1 on are signed and notarized. Older macOS builds and
+the (still unsigned) Windows builds warn on first launch:
 
-- **macOS:** right-click the app → Open, or run
+- **macOS (2.0.0 and earlier):** right-click the app → Open, or run
   `xattr -dr com.apple.quarantine "/Applications/Tailrmade Companion.app"`.
 - **Windows:** SmartScreen → More info → Run anyway.
 
@@ -29,6 +30,11 @@ Until the builds are signed, the OS will warn on first launch:
 Open Settings from the tray and paste keys there. They are stored in the system
 keychain (macOS Keychain, Windows Credential Manager, Secret Service on Linux)
 and only sent to the matching provider.
+
+On macOS you may be asked once for your login password so the app can read
+its keychain entries, typically after updating from an unsigned build (2.0.0
+or earlier). Enter it and click **Always Allow**. Signed builds keep the same
+identity across updates, so the prompt should not come back.
 
 Supported keys: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`,
 `DEEPSEEK_API_KEY`, `MOONSHOT_API_KEY`. Custom keys added in Settings are
